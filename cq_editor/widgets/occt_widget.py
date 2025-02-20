@@ -1,8 +1,10 @@
 from sys import platform
 
+import math
 
-from PyQt5.QtWidgets import QWidget, QApplication
-from PyQt5.QtCore import pyqtSlot, pyqtSignal, Qt, QEvent
+from PyQt5.QtGui import QWheelEvent
+from PyQt5.QtWidgets import QWidget, QApplication, QGestureEvent, QPinchGesture
+from PyQt5.QtCore import pyqtSlot, pyqtSignal, Qt, QEvent, QPointF
 
 import OCP
 
@@ -13,7 +15,7 @@ from OCP.AIS import AIS_InteractiveContext, AIS_DisplayMode
 from OCP.Quantity import Quantity_Color
 
 
-ZOOM_STEP = 0.9
+ZOOM_STEP = 0.999
 
 
 class OCCTWidget(QWidget):
@@ -39,8 +41,12 @@ class OCCTWidget(QWidget):
         self.view = self.viewer.CreateView()
         self.context = AIS_InteractiveContext(self.viewer)
 
+        self.old_pos = QPointF()
+
         # Trihedorn, lights, etc
         self.prepare_display()
+        
+        self.grabGesture(Qt.GestureType.PinchGesture)
 
     def prepare_display(self):
 
@@ -64,12 +70,43 @@ class OCCTWidget(QWidget):
         ctx.SetDisplayMode(AIS_DisplayMode.AIS_Shaded, True)
         ctx.DefaultDrawer().SetFaceBoundaryDraw(True)
 
-    def wheelEvent(self, event):
+    def event(self, event):
 
-        delta = event.angleDelta().y()
-        factor = ZOOM_STEP if delta < 0 else 1 / ZOOM_STEP
+        if event.type() == QEvent.Gesture:
+            self.gestureEvent(event)
+            return True
+        return super(OCCTWidget, self).event(event)
+    
+    def gestureEvent(self, event: QGestureEvent):
 
-        self.view.SetZoom(factor)
+        for gesture in event.gestures():
+            gType = gesture.gestureType()
+            state = gesture.state()
+            if state == Qt.GestureStarted:
+                event.accept(gType)
+            if gType == Qt.GestureType.PinchGesture:
+                self.pinchGesture(gesture)
+    
+    def pinchGesture(self, gesture: QPinchGesture):
+        
+        changes = gesture.changeFlags()
+        if changes & QPinchGesture.ChangeFlag.ScaleFactorChanged:
+            self.view.SetZoom(gesture.scaleFactor())
+        if changes & QPinchGesture.ChangeFlag.RotationAngleChanged:
+            rot = gesture.rotationAngle()
+            lastRot = gesture.lastRotationAngle()
+            self.view.Rotate(0, 0, (rot - lastRot) * math.pi/180)
+
+    def wheelEvent(self, event: QWheelEvent):
+
+        if event.source() == Qt.MouseEventSource.MouseEventSynthesizedBySystem:
+            pixels = event.pixelDelta()
+            inv = -1 if event.inverted() else 1
+            self.view.Pan(pixels.x(), inv * pixels.y(), theToStart=True)
+        else:
+            delta = event.angleDelta().y()
+            factor = math.pow(ZOOM_STEP, delta)
+            self.view.SetZoom(factor)
 
     def mousePressEvent(self, event):
 
